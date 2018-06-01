@@ -29,6 +29,7 @@ import com.mongodb.stitch.android.core.services.internal.StitchServiceClientImpl
 import com.mongodb.stitch.core.StitchAppClientConfiguration;
 import com.mongodb.stitch.core.StitchAppClientInfo;
 import com.mongodb.stitch.core.internal.CoreStitchAppClient;
+import com.mongodb.stitch.core.internal.common.AuthMonitor;
 import com.mongodb.stitch.core.internal.net.StitchAppRoutes;
 import com.mongodb.stitch.core.internal.net.StitchRequestClient;
 
@@ -38,7 +39,7 @@ import java.util.concurrent.Callable;
 import org.bson.codecs.Decoder;
 import org.bson.codecs.configuration.CodecRegistry;
 
-public final class StitchAppClientImpl implements StitchAppClient {
+public final class StitchAppClientImpl implements StitchAppClient, AuthMonitor {
 
   private final CoreStitchAppClient coreClient;
   private final TaskDispatcher dispatcher;
@@ -64,7 +65,9 @@ public final class StitchAppClientImpl implements StitchAppClient {
             config.getDataDirectory(),
             config.getLocalAppName(),
             config.getLocalAppVersion(),
-            config.getCodecRegistry());
+            config.getCodecRegistry(),
+            config.getNetworkMonitor(),
+            this);
     this.routes = new StitchAppRoutes(this.info.getClientAppId());
     final StitchRequestClient requestClient =
         new StitchRequestClient(
@@ -203,6 +206,11 @@ public final class StitchAppClientImpl implements StitchAppClient {
           return coreClient.callFunctionInternal(name, args, requestTimeout, resultDecoder);
         }
       });
+  }
+
+  @Override
+  public boolean isLoggedIn() {
+    return getAuth().isLoggedIn();
   }
 
   /**
