@@ -25,10 +25,14 @@ import com.mongodb.stitch.core.services.mongodb.remote.OperationType;
 import com.mongodb.stitch.core.services.mongodb.remote.internal.ResultDecoders;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import javax.annotation.Nonnull;
 
+import org.bson.BsonArray;
 import org.bson.BsonBinary;
 import org.bson.BsonBinaryReader;
 import org.bson.BsonBinaryWriter;
@@ -40,6 +44,7 @@ import org.bson.BsonReader;
 import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.bson.BsonWriter;
+import org.bson.Document;
 import org.bson.codecs.BsonDocumentCodec;
 import org.bson.codecs.Codec;
 import org.bson.codecs.DecoderContext;
@@ -49,7 +54,7 @@ import org.bson.io.OutputBuffer;
 
 
 class CoreDocumentSynchronizationConfig {
-  static final Codec<BsonDocument> BSON_DOCUMENT_CODEC = new BsonDocumentCodec();
+  private static final Codec<BsonDocument> BSON_DOCUMENT_CODEC = new BsonDocumentCodec();
 
   private final MongoCollection<CoreDocumentSynchronizationConfig> docsColl;
   private final MongoNamespace namespace;
@@ -112,6 +117,17 @@ class CoreDocumentSynchronizationConfig {
     return filter;
   }
 
+  static BsonDocument getDocsFilter(
+      @Nonnull final MongoNamespace namespace,
+      @Nonnull final BsonValue... documentIds
+  ) {
+    final BsonDocument filter = new BsonDocument();
+    filter.put(ConfigCodec.Fields.NAMESPACE_FIELD, new BsonString(namespace.toString()));
+    filter.put(ConfigCodec.Fields.DOCUMENT_ID_FIELD,
+        new BsonDocument("$in", new BsonArray(Arrays.asList(documentIds))));
+    return filter;
+  }
+
   public boolean isStale() {
     docLock.readLock().lock();
     try {
@@ -127,12 +143,12 @@ class CoreDocumentSynchronizationConfig {
   public void setStale(final boolean stale) {
     docLock.writeLock().lock();
     try {
-      docsColl.updateOne(
-          getDocFilter(namespace, documentId),
-          new BsonDocument("$set",
-              new BsonDocument(
-                  CoreDocumentSynchronizationConfig.ConfigCodec.Fields.IS_STALE,
-                  new BsonBoolean(stale))));
+//      docsColl.updateOne(
+//          getDocFilter(namespace, documentId),
+//          new BsonDocument("$set",
+//              new BsonDocument(
+//                  CoreDocumentSynchronizationConfig.ConfigCodec.Fields.IS_STALE,
+//                  new BsonBoolean(stale))));
       isStale = stale;
     } catch (IllegalStateException e) {
       // eat this
@@ -209,6 +225,29 @@ class CoreDocumentSynchronizationConfig {
    * @param atVersion   the version for which the write occurred.
    * @param changeEvent the description of the write/change.
    */
+  void setSomePendingWritesNoDB(
+      final long atTime,
+      final BsonDocument atVersion,
+      final ChangeEvent<BsonDocument> changeEvent
+  ) {
+    docLock.writeLock().lock();
+    try {
+      this.lastUncommittedChangeEvent = changeEvent;
+      this.lastResolution = atTime;
+      this.lastKnownRemoteVersion = atVersion;
+    } finally {
+      docLock.writeLock().unlock();
+    }
+  }
+
+  /**
+   * Sets that there are some pending writes that occurred at a time for an associated
+   * locally emitted change event. This variant updates the last version set.
+   *
+   * @param atTime      the time at which the write occurred.
+   * @param atVersion   the version for which the write occurred.
+   * @param changeEvent the description of the write/change.
+   */
   void setSomePendingWrites(
       final long atTime,
       final BsonDocument atVersion,
@@ -223,6 +262,16 @@ class CoreDocumentSynchronizationConfig {
       docsColl.replaceOne(
           getDocFilter(namespace, documentId),
           this);
+    } finally {
+      docLock.writeLock().unlock();
+    }
+  }
+
+  void setPendingWritesCompleteNoDB(final BsonDocument atVersion) {
+    docLock.writeLock().lock();
+    try {
+      this.lastUncommittedChangeEvent = null;
+      this.lastKnownRemoteVersion = atVersion;
     } finally {
       docLock.writeLock().unlock();
     }

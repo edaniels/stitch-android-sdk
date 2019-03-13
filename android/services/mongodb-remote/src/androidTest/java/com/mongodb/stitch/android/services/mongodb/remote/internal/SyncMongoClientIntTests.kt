@@ -38,6 +38,7 @@ import com.mongodb.stitch.core.auth.providers.userpassword.UserPasswordCredentia
 import org.bson.BsonValue
 import org.bson.Document
 import org.bson.conversions.Bson
+import org.bson.types.Binary
 import org.bson.types.ObjectId
 import org.junit.After
 import org.junit.Assert
@@ -80,6 +81,10 @@ class SyncMongoClientIntTests : BaseStitchAndroidIntTest(), SyncIntTestRunner {
 
         override fun syncOne(id: BsonValue): Void? {
             return Tasks.await(sync.syncOne(id))
+        }
+
+        override fun syncMany(vararg id: BsonValue) {
+            Tasks.await(sync.syncMany(*id))
         }
 
         override fun count(filter: Bson): Long {
@@ -250,6 +255,11 @@ class SyncMongoClientIntTests : BaseStitchAndroidIntTest(), SyncIntTestRunner {
 
     override fun currentUserId(): String? {
         return client.auth.user?.id
+    }
+
+    @Test
+    override fun testInitSyncPerf() {
+//        testProxy.testInitSyncPerf()
     }
 
     @Test
