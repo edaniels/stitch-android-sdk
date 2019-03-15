@@ -29,9 +29,12 @@ import com.mongodb.client.model.DeleteManyModel;
 import com.mongodb.client.model.DeleteOneModel;
 import com.mongodb.client.model.FindOneAndReplaceOptions;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
+import com.mongodb.client.model.InsertOneModel;
 import com.mongodb.client.model.ReplaceOneModel;
 import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.model.ReturnDocument;
+import com.mongodb.client.model.UpdateManyModel;
+import com.mongodb.client.model.UpdateOneModel;
 import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.model.WriteModel;
 import com.mongodb.client.result.DeleteResult;
@@ -55,6 +58,7 @@ import com.mongodb.stitch.core.services.mongodb.remote.RemoteUpdateResult;
 import com.mongodb.stitch.core.services.mongodb.remote.UpdateDescription;
 import com.mongodb.stitch.core.services.mongodb.remote.internal.CoreRemoteMongoClient;
 import com.mongodb.stitch.core.services.mongodb.remote.internal.CoreRemoteMongoCollection;
+import com.mongodb.stitch.core.services.mongodb.remote.internal.CoreRemoteMongoCursor;
 import com.mongodb.stitch.core.services.mongodb.remote.sync.ChangeEventListener;
 import com.mongodb.stitch.core.services.mongodb.remote.sync.ConflictHandler;
 
@@ -65,6 +69,8 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -84,7 +90,10 @@ import org.bson.BsonDocument;
 import org.bson.BsonInt32;
 import org.bson.BsonValue;
 import org.bson.Document;
+import org.bson.RawBsonDocument;
+import org.bson.codecs.BsonDocumentCodec;
 import org.bson.codecs.Codec;
+import org.bson.codecs.RawBsonDocumentCodec;
 import org.bson.codecs.configuration.CodecRegistries;
 import org.bson.codecs.configuration.CodecRegistry;
 import org.bson.conversions.Bson;
@@ -98,19 +107,22 @@ import org.bson.diagnostics.Loggers;
  */
 public class DataSynchronizer implements NetworkMonitor.StateListener {
   class BatchOps {
-    final List<WriteModel<BsonDocument>> bulkWriteModels;
+    final List<WriteModel<RawBsonDocument>> bulkWriteModels;
     final List<WriteModel<CoreDocumentSynchronizationConfig>> configs;
     final Set<BsonValue> ids;
+    int size;
 
     BatchOps(final WriteModel<CoreDocumentSynchronizationConfig> config,
-             final WriteModel<BsonDocument> writeModel,
+             final WriteModel<RawBsonDocument> writeModel,
              final BsonValue... ids) {
       this();
       if (writeModel != null) {
         this.bulkWriteModels.add(writeModel);
+        size += modelSizeRaw(writeModel);
       }
       if (config != null) {
         this.configs.add(config);
+        size += modelSize(config);
       }
       this.ids.addAll(Arrays.asList(ids));
     }
@@ -121,12 +133,99 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
       this.ids = new HashSet<>();
     }
 
+    int size() {
+      return size;
+    }
+
     void merge(@Nullable final BatchOps batchOps) {
       if (batchOps != null) {
         this.bulkWriteModels.addAll(batchOps.bulkWriteModels);
         this.configs.addAll(batchOps.configs);
         this.ids.addAll(batchOps.ids);
+
+        for (final WriteModel<RawBsonDocument> model : batchOps.bulkWriteModels) {
+          size += modelSizeRaw(model);
+        }
+        for (final WriteModel<CoreDocumentSynchronizationConfig> model : batchOps.configs) {
+          size += modelSize(model);
+        }
       }
+    }
+
+    private int modelSizeRaw(final WriteModel<RawBsonDocument> model) {
+      int size = 0;
+      if (model instanceof DeleteManyModel) {
+        final DeleteManyModel<RawBsonDocument> deleteModel = (DeleteManyModel<RawBsonDocument>)(model);
+        final RawBsonDocument rawDoc = new RawBsonDocument(deleteModel.getFilter().toBsonDocument(null, null), new BsonDocumentCodec());
+        size += rawDoc.getByteBuffer().remaining();
+      } else if (model instanceof DeleteOneModel) {
+        final DeleteOneModel<RawBsonDocument> deleteModel = (DeleteOneModel<RawBsonDocument>)(model);
+        final RawBsonDocument rawDoc = new RawBsonDocument(deleteModel.getFilter().toBsonDocument(null, null), new BsonDocumentCodec());
+        size += rawDoc.getByteBuffer().remaining();
+      } else if (model instanceof InsertOneModel) {
+        final InsertOneModel<RawBsonDocument> insertModel = (InsertOneModel<RawBsonDocument>)(model);
+        size += insertModel.getDocument().getByteBuffer().remaining();
+      } else if (model instanceof ReplaceOneModel) {
+        final ReplaceOneModel<RawBsonDocument> replaceModel = (ReplaceOneModel<RawBsonDocument>)(model);
+        final RawBsonDocument rawDoc = new RawBsonDocument(replaceModel.getFilter().toBsonDocument(null, null), new BsonDocumentCodec());
+        size += rawDoc.getByteBuffer().remaining();
+        size += replaceModel.getReplacement().getByteBuffer().remaining();
+      } else if (model instanceof UpdateManyModel) {
+        final UpdateManyModel<RawBsonDocument> updateModel = (UpdateManyModel<RawBsonDocument>)(model);
+        final RawBsonDocument rawDoc = new RawBsonDocument(updateModel.getFilter().toBsonDocument(null, null), new BsonDocumentCodec());
+        size += rawDoc.getByteBuffer().remaining();
+        final RawBsonDocument rawUpdateDoc = new RawBsonDocument(updateModel.getUpdate().toBsonDocument(null, null), new BsonDocumentCodec());
+        size += rawUpdateDoc.getByteBuffer().remaining();
+      } else if (model instanceof UpdateOneModel) {
+        final UpdateOneModel<RawBsonDocument> updateModel = (UpdateOneModel<RawBsonDocument>)(model);
+        final RawBsonDocument rawDoc = new RawBsonDocument(updateModel.getFilter().toBsonDocument(null, null), new BsonDocumentCodec());
+        size += rawDoc.getByteBuffer().remaining();
+        final RawBsonDocument rawUpdateDoc = new RawBsonDocument(updateModel.getUpdate().toBsonDocument(null, null), new BsonDocumentCodec());
+        size += rawUpdateDoc.getByteBuffer().remaining();
+      } else {
+        throw new IllegalArgumentException("unknown model");
+      }
+      return size;
+    }
+
+    private int modelSize(final WriteModel<CoreDocumentSynchronizationConfig> model) {
+      int size = 0;
+      if (model instanceof DeleteManyModel) {
+        final DeleteManyModel<CoreDocumentSynchronizationConfig> deleteModel = (DeleteManyModel<CoreDocumentSynchronizationConfig>)(model);
+        final RawBsonDocument rawDoc = new RawBsonDocument(deleteModel.getFilter().toBsonDocument(null, null), new BsonDocumentCodec());
+        size += rawDoc.getByteBuffer().remaining();
+      } else if (model instanceof DeleteOneModel) {
+        final DeleteOneModel<CoreDocumentSynchronizationConfig> deleteModel = (DeleteOneModel<CoreDocumentSynchronizationConfig>)(model);
+        final RawBsonDocument rawDoc = new RawBsonDocument(deleteModel.getFilter().toBsonDocument(null, null), new BsonDocumentCodec());
+        size += rawDoc.getByteBuffer().remaining();
+      } else if (model instanceof InsertOneModel) {
+        final InsertOneModel<CoreDocumentSynchronizationConfig> insertModel = (InsertOneModel<CoreDocumentSynchronizationConfig>)(model);
+        if (insertModel.getDocument().getLastUncommittedChangeEvent() != null && insertModel.getDocument().getLastUncommittedChangeEvent().getFullDocument() != null) {
+          size += insertModel.getDocument().getLastUncommittedChangeEvent().getFullDocument().getByteBuffer().remaining(); // ROUGH CALC
+        }
+      } else if (model instanceof ReplaceOneModel) {
+        final ReplaceOneModel<CoreDocumentSynchronizationConfig> replaceModel = (ReplaceOneModel<CoreDocumentSynchronizationConfig>)(model);
+        final RawBsonDocument rawDoc = new RawBsonDocument(replaceModel.getFilter().toBsonDocument(null, null), new BsonDocumentCodec());
+        size += rawDoc.getByteBuffer().remaining();
+        if (replaceModel.getReplacement().getLastUncommittedChangeEvent() != null && replaceModel.getReplacement().getLastUncommittedChangeEvent().getFullDocument() != null) {
+          size += replaceModel.getReplacement().getLastUncommittedChangeEvent().getFullDocument().getByteBuffer().remaining(); // ROUGH CALC
+        }
+      } else if (model instanceof UpdateManyModel) {
+        final UpdateManyModel<CoreDocumentSynchronizationConfig> updateModel = (UpdateManyModel<CoreDocumentSynchronizationConfig>)(model);
+        final RawBsonDocument rawDoc = new RawBsonDocument(updateModel.getFilter().toBsonDocument(null, null), new BsonDocumentCodec());
+        size += rawDoc.getByteBuffer().remaining();
+        final RawBsonDocument rawUpdateDoc = new RawBsonDocument(updateModel.getUpdate().toBsonDocument(null, null), new BsonDocumentCodec());
+        size += rawUpdateDoc.getByteBuffer().remaining();
+      } else if (model instanceof UpdateOneModel) {
+        final UpdateOneModel<CoreDocumentSynchronizationConfig> updateModel = (UpdateOneModel<CoreDocumentSynchronizationConfig>)(model);
+        final RawBsonDocument rawDoc = new RawBsonDocument(updateModel.getFilter().toBsonDocument(null, null), new BsonDocumentCodec());
+        size += rawDoc.getByteBuffer().remaining();
+        final RawBsonDocument rawUpdateDoc = new RawBsonDocument(updateModel.getUpdate().toBsonDocument(null, null), new BsonDocumentCodec());
+        size += rawUpdateDoc.getByteBuffer().remaining();
+      } else {
+        throw new IllegalArgumentException("unknown model");
+      }
+      return size;
     }
 
     void commitAndClear(final MongoNamespace namespace,
@@ -154,6 +253,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
 
       this.bulkWriteModels.clear();
       this.configs.clear();
+      size = 0;
     }
   }
 
@@ -313,7 +413,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
       final BsonDocument filter = getDocumentIdFilter(documentId);
 
       if (recoveredIds.contains(docConfig.getDocumentId())) {
-        final ChangeEvent<BsonDocument> pendingWrite = docConfig.getLastUncommittedChangeEvent();
+        final ChangeEvent<RawBsonDocument> pendingWrite = docConfig.getLastUncommittedChangeEvent();
         if (pendingWrite != null) {
           switch (pendingWrite.getOperationType()) {
             case INSERT:
@@ -619,102 +719,159 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
       nsConfig.getLock().writeLock().lock();
 
       try {
-        final Map<BsonValue, ChangeEvent<BsonDocument>> remoteChangeEvents =
+        final Map<BsonValue, ChangeEvent<RawBsonDocument>> remoteChangeEvents =
             getEventsForNamespace(nsConfig.getNamespace());
 
         final Set<BsonValue> unseenIds = nsConfig.getStaleDocumentIds();
-        final Set<BsonDocument> latestDocumentsFromStale =
+        final Iterator<RawBsonDocument> latestDocumentsFromStale =
             getLatestDocumentsForStaleFromRemote(nsConfig, unseenIds);
-
-        final Map<BsonValue, BsonDocument> latestDocumentMap = new HashMap<>();
-
-        for (final BsonDocument latestDocument : latestDocumentsFromStale) {
-          latestDocumentMap.put(latestDocument.get("_id"), latestDocument);
-        }
 
         final BatchOps batchOps = new BatchOps();
 
-        // a. For each unprocessed change event
-        for (final Map.Entry<BsonValue, ChangeEvent<BsonDocument>> eventEntry :
-            remoteChangeEvents.entrySet()) {
-          logger.debug(String.format(
-              Locale.US,
-              "t='%d': syncRemoteToLocal consuming event of type: %s",
-              logicalT,
-              eventEntry.getValue().getOperationType()));
+        final int MAX_BULK_SIZE = 5 * 1024 * 1024; // 1 MiB
 
-          // i. Find the corresponding local document config.
-          final CoreDocumentSynchronizationConfig docConfig =
-              nsConfig.getSynchronizedDocument(
-                  BsonUtils.getDocumentId(eventEntry.getValue().getDocumentKey()));
+        final Set<BsonValue> idsFromChangeEvents = new HashSet<>();
+        final Set<BsonValue> staleDocsProcessed = new HashSet<>();
+        final Iterator<Map.Entry<BsonValue, ChangeEvent<RawBsonDocument>>> entryIterator = remoteChangeEvents.entrySet().iterator();
 
-          if (docConfig == null || docConfig.isPaused()) {
-            // Not interested in this event.
-            continue;
+        final List<BatchOps> leftOver = new LinkedList<>();
+        while (entryIterator.hasNext() || latestDocumentsFromStale.hasNext() || !unseenIds.isEmpty()) {
+          boolean batchReady = false;
+
+          // Change events
+          while (!leftOver.isEmpty()) {
+            final BatchOps ops = leftOver.remove(0);
+            if (batchOps.size() != 0 && batchOps.size() + ops.size() > MAX_BULK_SIZE) {
+              leftOver.add(0, ops);
+              batchReady = true;
+              break;
+            }
+            batchOps.merge(ops);
+          }
+          while (!batchReady && entryIterator.hasNext()) {
+            // a. For each unprocessed change event
+            final Map.Entry<BsonValue, ChangeEvent<RawBsonDocument>> eventEntry = entryIterator.next();
+            logger.debug(String.format(
+                Locale.US,
+                "t='%d': syncRemoteToLocal consuming event of type: %s",
+                logicalT,
+                eventEntry.getValue().getOperationType()));
+
+            // i. Find the corresponding local document config.
+            final CoreDocumentSynchronizationConfig docConfig =
+                nsConfig.getSynchronizedDocument(
+                    BsonUtils.getDocumentId(eventEntry.getValue().getDocumentKey()));
+
+            if (docConfig == null || docConfig.isPaused()) {
+              // Not interested in this event.
+              continue;
+            }
+
+            unseenIds.remove(docConfig.getDocumentId());
+            idsFromChangeEvents.add(docConfig.getDocumentId());
+            final BatchOps newOps = syncRemoteChangeEventToLocal(nsConfig, docConfig, eventEntry.getValue());
+            if (newOps == null) {
+              continue;
+            }
+
+            if (batchOps.size() + newOps.size() > MAX_BULK_SIZE) {
+              leftOver.add(0, newOps);
+              batchReady = true;
+              break;
+            }
+            batchOps.merge(newOps);
           }
 
-          unseenIds.remove(docConfig.getDocumentId());
-          latestDocumentMap.remove(docConfig.getDocumentId());
-          batchOps.merge(syncRemoteChangeEventToLocal(nsConfig, docConfig, eventEntry.getValue()));
+          while (!batchReady && latestDocumentsFromStale.hasNext()) {
+            // For synchronized documents that had no unprocessed change event, but were marked as
+            // stale, synthesize a remote replace event to replace the local stale document with the
+            // latest remote copy.
+            for (; latestDocumentsFromStale.hasNext(); ) {
+              final RawBsonDocument latestDocument = latestDocumentsFromStale.next();
+
+              final BsonValue id = latestDocument.get("_id");
+              if (idsFromChangeEvents.contains(id)) {
+                continue;
+              }
+              staleDocsProcessed.add(latestDocument.get("_id"));
+
+              final CoreDocumentSynchronizationConfig docConfig =
+                  nsConfig.getSynchronizedDocument(id);
+              if (docConfig == null || docConfig.isPaused()) {
+                // means we aren't actually synchronizing on this remote doc
+                continue;
+              }
+              final BatchOps newOps = syncRemoteChangeEventToLocal(
+                  nsConfig,
+                  docConfig,
+                  ChangeEvents.changeEventForLocalReplace(
+                      nsConfig.getNamespace(),
+                      id,
+                      latestDocument,
+                      false
+                  ));
+              if (newOps == null) {
+                continue;
+              }
+
+              if (batchOps.size() + newOps.size() > MAX_BULK_SIZE) {
+                leftOver.add(0, newOps);
+                batchReady = true;
+                break;
+              }
+              batchOps.merge(newOps);
+            }
+          }
+
+          while (!batchReady && !unseenIds.isEmpty()) {
+            // For synchronized documents that had no unprocessed change event, and did not have a
+            // latest version when stale documents were queried, synthesize a remote delete event to
+            // delete the local document.
+            unseenIds.removeAll(staleDocsProcessed);
+            staleDocsProcessed.clear();
+            final Iterator<BsonValue> unseenIdIterator = unseenIds.iterator();
+            while (unseenIdIterator.hasNext()) {
+              final BsonValue unseenId = unseenIdIterator.next();
+              unseenIdIterator.remove();
+              final CoreDocumentSynchronizationConfig docConfig =
+                  nsConfig.getSynchronizedDocument(unseenId);
+              if (docConfig == null) {
+                // means we aren't actually synchronizing on this remote doc
+                continue;
+              }
+              if (docConfig.getLastKnownRemoteVersion() == null || docConfig.isPaused()) {
+                docConfig.setStale(false);
+                continue;
+              }
+
+              final BatchOps newOps = syncRemoteChangeEventToLocal(
+                  nsConfig,
+                  docConfig,
+                  ChangeEvents.changeEventForLocalDelete(
+                      nsConfig.getNamespace(),
+                      unseenId,
+                      docConfig.hasUncommittedWrites()
+                  ));
+              if (newOps == null) {
+                continue;
+              }
+
+              if (batchOps.size() + newOps.size() > MAX_BULK_SIZE) {
+                leftOver.add(0, newOps);
+                batchReady = true;
+                break;
+              }
+              batchOps.merge(newOps);
+
+              docConfig.setStale(false);
+            }
+          }
+
+          if (batchOps.size() > 0) {
+            batchOps.commitAndClear(nsConfig.getNamespace(), nsConfig.getDocsColl());
+          }
         }
-
-
-        // For synchronized documents that had no unprocessed change event, but were marked as
-        // stale, synthesize a remote replace event to replace the local stale document with the
-        // latest remote copy.
-        for (final BsonValue docId : unseenIds) {
-          final CoreDocumentSynchronizationConfig docConfig =
-              nsConfig.getSynchronizedDocument(docId);
-          if (docConfig == null || docConfig.isPaused()) {
-            // means we aren't actually synchronizing on this remote doc
-            continue;
-          }
-
-          if (latestDocumentMap.containsKey(docId)) {
-            batchOps.merge(syncRemoteChangeEventToLocal(
-                nsConfig,
-                docConfig,
-                ChangeEvents.changeEventForLocalReplace(
-                    nsConfig.getNamespace(),
-                    docId,
-                    latestDocumentMap.get(docId),
-                    false
-                ))
-            );
-          }
-        }
-
         nsConfig.setStale(false);
-
-        // For synchronized documents that had no unprocessed change event, and did not have a
-        // latest version when stale documents were queried, synthesize a remote delete event to
-        // delete the local document.
-        unseenIds.removeAll(latestDocumentMap.keySet());
-        for (final BsonValue unseenId : unseenIds) {
-          final CoreDocumentSynchronizationConfig docConfig =
-              nsConfig.getSynchronizedDocument(unseenId);
-          if (docConfig == null) {
-            // means we aren't actually synchronizing on this remote doc
-            continue;
-          }
-          if (docConfig.getLastKnownRemoteVersion() == null || docConfig.isPaused()) {
-            docConfig.setStale(false);
-            continue;
-          }
-
-          batchOps.merge(syncRemoteChangeEventToLocal(
-              nsConfig,
-              docConfig,
-              ChangeEvents.changeEventForLocalDelete(
-                  nsConfig.getNamespace(),
-                  unseenId,
-                  docConfig.hasUncommittedWrites()
-              )));
-
-          docConfig.setStale(false);
-        }
-
-        batchOps.commitAndClear(nsConfig.getNamespace(), nsConfig.getDocsColl());
       } finally {
         nsConfig.getLock().writeLock().unlock();
         streamerLock.writeLock().unlock();
@@ -738,7 +895,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
   private @Nullable BatchOps syncRemoteChangeEventToLocal(
       final NamespaceSynchronizationConfig nsConfig,
       final CoreDocumentSynchronizationConfig docConfig,
-      final ChangeEvent<BsonDocument> remoteChangeEvent
+      final ChangeEvent<RawBsonDocument> remoteChangeEvent
   ) {
     if (docConfig.hasUncommittedWrites() && docConfig.getLastResolution() == logicalT) {
       logger.debug(String.format(
@@ -915,7 +1072,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
     // b.  If the GUIDs are different, do a full document lookup against the remote server to
     //     fetch the latest version (this is to guard against the case where the unprocessed
     //     change event is stale).
-    final BsonDocument newestRemoteDocument = this.getRemoteCollection(nsConfig.getNamespace())
+    final RawBsonDocument newestRemoteDocument = this.getRemoteCollection(nsConfig.getNamespace(), RawBsonDocument.class)
             .find(new Document("_id", docConfig.getDocumentId())).first();
 
     if (newestRemoteDocument == null) {
@@ -1041,7 +1198,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
           }
 
           // i. Retrieve the change event for this local document in the local config metadata
-          final ChangeEvent<BsonDocument> localChangeEvent =
+          final ChangeEvent<RawBsonDocument> localChangeEvent =
               docConfig.getLastUncommittedChangeEvent();
           logger.debug(String.format(
               Locale.US,
@@ -1058,7 +1215,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
 
           // This is here as an optimization in case an op requires we look up the remote document
           // in advance and we only want to do this once.
-          BsonDocument remoteDocument = null;
+          RawBsonDocument remoteDocument = null;
           boolean remoteDocumentFetched = false;
 
           final DocumentVersionInfo localVersionInfo =
@@ -1067,7 +1224,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
 
           // ii. Check if the internal remote change stream listener has an unprocessed event for
           //     this document.
-          final ChangeEvent<BsonDocument> unprocessedRemoteEvent =
+          final ChangeEvent<RawBsonDocument> unprocessedRemoteEvent =
               instanceChangeStreamListener.getUnprocessedEventForDocumentId(
                   nsConfig.getNamespace(),
                   docConfig.getDocumentId());
@@ -1330,7 +1487,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
                 }
                 // c. If no documents are matched, record that a conflict has occurred.
                 if (result.getDeletedCount() == 0) {
-                  remoteDocument = remoteColl.find(docFilter).first();
+                  remoteDocument = new RawBsonDocument(remoteColl.find(docFilter).first(), new BsonDocumentCodec());
                   remoteDocumentFetched = true;
                   if (remoteDocument != null) {
                     isConflicted = true;
@@ -1388,7 +1545,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
 
             // since we strip version information from documents before setting pending writes, we
             // don't have to worry about a stale document version in the event here.
-            final ChangeEvent<BsonDocument> committedEvent =
+            final ChangeEvent<RawBsonDocument> committedEvent =
                 docConfig.getLastUncommittedChangeEvent();
             emitEvent(docConfig.getDocumentId(), new ChangeEvent<>(
                 committedEvent.getId(),
@@ -1412,7 +1569,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
             // v. Otherwise, invoke the collection-level conflict handler with the local change
             // event and the remote change event (synthesized by doing a lookup of the document or
             // sourced from the listener)
-            final ChangeEvent<BsonDocument> remoteChangeEvent;
+            final ChangeEvent<RawBsonDocument> remoteChangeEvent;
             if (!remoteDocumentFetched) {
               remoteChangeEvent =
                   getSynthesizedRemoteChangeEventForDocument(remoteColl, docConfig.getDocumentId());
@@ -1488,7 +1645,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
   private BatchOps resolveConflict(
       final MongoNamespace namespace,
       final CoreDocumentSynchronizationConfig docConfig,
-      final ChangeEvent<BsonDocument> remoteEvent
+      final ChangeEvent<RawBsonDocument> remoteEvent
   ) {
     if (this.syncConfig.getNamespaceConfig(namespace).getConflictHandler() == null) {
       logger.warn(String.format(
@@ -1600,10 +1757,10 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
 
       // Update the document locally which will keep the pending writes but with
       // a new version next time around.
-      @SuppressWarnings("unchecked") final BsonDocument docForStorage =
-          BsonUtils.documentToBsonDocument(
+      @SuppressWarnings("unchecked") final RawBsonDocument docForStorage =
+          new RawBsonDocument(BsonUtils.documentToBsonDocument(
               resolvedDocument,
-              syncConfig.getNamespaceConfig(namespace).getDocumentCodec());
+              syncConfig.getNamespaceConfig(namespace).getDocumentCodec()), new BsonDocumentCodec());
 
       logger.debug(String.format(
           Locale.US,
@@ -1666,14 +1823,21 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
    * @param documentId the _id of the document.
    * @return a synthesized change event for a remote document.
    */
-  private ChangeEvent<BsonDocument> getSynthesizedRemoteChangeEventForDocument(
+  private ChangeEvent<RawBsonDocument> getSynthesizedRemoteChangeEventForDocument(
       final CoreRemoteMongoCollection<BsonDocument> remoteColl,
       final BsonValue documentId
   ) {
+    final BsonDocument remoteDoc = remoteColl.find(getDocumentIdFilter(documentId)).first();
+    if (remoteDoc == null) {
+      return getSynthesizedRemoteChangeEventForDocument(
+          remoteColl.getNamespace(),
+          documentId,
+          null);
+    }
     return getSynthesizedRemoteChangeEventForDocument(
         remoteColl.getNamespace(),
         documentId,
-        remoteColl.find(getDocumentIdFilter(documentId)).first());
+        new RawBsonDocument(remoteDoc, new BsonDocumentCodec()));
   }
 
   /**
@@ -1684,10 +1848,10 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
    * @param document   the remote document.
    * @return a synthesized change event for a remote document.
    */
-  private ChangeEvent<BsonDocument> getSynthesizedRemoteChangeEventForDocument(
+  private ChangeEvent<RawBsonDocument> getSynthesizedRemoteChangeEventForDocument(
       final MongoNamespace ns,
       final BsonValue documentId,
-      final BsonDocument document
+      final RawBsonDocument document
   ) {
     // a. When the document is looked up, if it cannot be found the synthesized change event is a
     // DELETE, otherwise it's a REPLACE.
@@ -1701,16 +1865,16 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
    * Queues up a callback to be removed and invoked on the next change event.
    */
   public void addWatcher(final MongoNamespace namespace,
-                                     final Callback<ChangeEvent<BsonDocument>, Object> watcher) {
+                                     final Callback<ChangeEvent<RawBsonDocument>, Object> watcher) {
     instanceChangeStreamListener.addWatcher(namespace, watcher);
   }
 
   public void removeWatcher(final MongoNamespace namespace,
-                          final Callback<ChangeEvent<BsonDocument>, Object> watcher) {
+                          final Callback<ChangeEvent<RawBsonDocument>, Object> watcher) {
     instanceChangeStreamListener.removeWatcher(namespace, watcher);
   }
 
-  Map<BsonValue, ChangeEvent<BsonDocument>> getEventsForNamespace(final MongoNamespace namespace) {
+  Map<BsonValue, ChangeEvent<RawBsonDocument>> getEventsForNamespace(final MongoNamespace namespace) {
     return instanceChangeStreamListener.getEventsForNamespace(namespace);
   }
 
@@ -2003,17 +2167,17 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
    * @param namespace the namespace to put the document in.
    * @param document  the document to insert.
    */
-  void insertOne(final MongoNamespace namespace, final BsonDocument document) {
+  void insertOne(final MongoNamespace namespace, final RawBsonDocument document) {
     this.waitUntilInitialized();
 
     try {
       ongoingOperationsGroup.enter();
       // Remove forbidden fields from the document before inserting it into the local collection.
-      final BsonDocument docForStorage = sanitizeDocument(document);
+      final RawBsonDocument docForStorage = sanitizeDocument(document);
 
       final Lock lock = this.syncConfig.getNamespaceConfig(namespace).getLock().writeLock();
       lock.lock();
-      final ChangeEvent<BsonDocument> event;
+      final ChangeEvent<RawBsonDocument> event;
       final BsonValue documentId;
       try {
         getLocalCollection(namespace).insertOne(docForStorage);
@@ -2040,27 +2204,27 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
    * @param documents the documents to insert
    */
   void insertMany(final MongoNamespace namespace,
-                  final List<BsonDocument> documents) {
+                  final List<RawBsonDocument> documents) {
     this.waitUntilInitialized();
 
     try {
       ongoingOperationsGroup.enter();
       // Remove forbidden fields from the documents before inserting them into the local collection.
-      final List<BsonDocument> docsForStorage = new ArrayList<>(documents.size());
+      final List<RawBsonDocument> docsForStorage = new ArrayList<>(documents.size());
 
-      for (final BsonDocument document : documents) {
+      for (final RawBsonDocument document : documents) {
         docsForStorage.add(sanitizeDocument(document));
       }
 
       final Lock lock =
           this.syncConfig.getNamespaceConfig(namespace).getLock().writeLock();
       lock.lock();
-      final List<ChangeEvent<BsonDocument>> eventsToEmit = new ArrayList<>();
+      final List<ChangeEvent<RawBsonDocument>> eventsToEmit = new ArrayList<>();
       try {
         getLocalCollection(namespace).insertMany(docsForStorage);
-        for (final BsonDocument document : docsForStorage) {
+        for (final RawBsonDocument document : docsForStorage) {
           final BsonValue documentId = BsonUtils.getDocumentId(document);
-          final ChangeEvent<BsonDocument> event =
+          final ChangeEvent<RawBsonDocument> event =
               ChangeEvents.changeEventForLocalInsert(namespace, document, true);
           final CoreDocumentSynchronizationConfig config = syncConfig.addAndGetSynchronizedDocument(
               namespace,
@@ -2073,7 +2237,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
         lock.unlock();
       }
       triggerListeningToNamespace(namespace);
-      for (final ChangeEvent<BsonDocument> event : eventsToEmit) {
+      for (final ChangeEvent<RawBsonDocument> event : eventsToEmit) {
         emitEvent(BsonUtils.getDocumentId(event.getDocumentKey()), event);
       }
     } finally {
@@ -2115,7 +2279,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
           this.syncConfig.getNamespaceConfig(namespace).getLock().writeLock();
       lock.lock();
       final BsonValue documentId;
-      final ChangeEvent<BsonDocument> event;
+      final ChangeEvent<RawBsonDocument> event;
       final boolean triggerNamespace;
       try {
         // read the local collection
@@ -2161,8 +2325,8 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
 
         // Ensure that the update didn't add any forbidden fields to the document, and remove them
         // if it did.
-        final BsonDocument documentAfterUpdate =
-            sanitizeCachedDocument(localCollection, unsanitizedDocumentAfterUpdate, documentId);
+        final RawBsonDocument documentAfterUpdate =
+            sanitizeCachedDocument(localCollection, sanitizeDocument(new RawBsonDocument(unsanitizedDocumentAfterUpdate, new BsonDocumentCodec())), documentId);
 
         // if there was no document prior and this was an upsert,
         // treat this as an insert.
@@ -2233,7 +2397,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
 
     ongoingOperationsGroup.enter();
     try {
-      final List<ChangeEvent<BsonDocument>> eventsToEmit = new ArrayList<>();
+      final List<ChangeEvent<RawBsonDocument>> eventsToEmit = new ArrayList<>();
       final UpdateResult result;
       final Lock lock =
           this.syncConfig.getNamespaceConfig(namespace).getLock().writeLock();
@@ -2285,8 +2449,8 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
 
               // Ensure that the update didn't add any forbidden fields to the document, and remove
               // them if it did.
-              final BsonDocument afterDocument =
-                  sanitizeCachedDocument(localCollection, unsanitizedAfterDocument, documentId);
+              final RawBsonDocument afterDocument =
+                  sanitizeCachedDocument(localCollection, new RawBsonDocument(unsanitizedAfterDocument, new BsonDocumentCodec()), documentId);
 
               // because we are looking up a bulk write, we may have queried documents
               // that match the updated state, but were not actually modified.
@@ -2298,7 +2462,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
               }
 
               final CoreDocumentSynchronizationConfig config;
-              final ChangeEvent<BsonDocument> event;
+              final ChangeEvent<RawBsonDocument> event;
 
               // if there was no earlier document and this was an upsert,
               // treat the upsert as an insert, as far as sync is concerned
@@ -2326,7 +2490,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
       if (result.getUpsertedId() != null) {
         triggerListeningToNamespace(namespace);
       }
-      for (final ChangeEvent<BsonDocument> event : eventsToEmit) {
+      for (final ChangeEvent<RawBsonDocument> event : eventsToEmit) {
         emitEvent(BsonUtils.getDocumentId(event.getDocumentKey()), event);
       }
       return result;
@@ -2349,14 +2513,14 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
       final BsonValue documentId,
       final BsonDocument document,
       final BsonDocument atVersion,
-      final ChangeEvent<BsonDocument> remoteEvent
+      final ChangeEvent<RawBsonDocument> remoteEvent
   ) {
-    final ChangeEvent<BsonDocument> event;
+    final ChangeEvent<RawBsonDocument> event;
     final Lock lock =
         this.syncConfig.getNamespaceConfig(namespace).getLock().writeLock();
     lock.lock();
     final CoreDocumentSynchronizationConfig config;
-    final BsonDocument docForStorage;
+    final RawBsonDocument docForStorage;
     try {
       config =
           syncConfig.getSynchronizedDocument(namespace, documentId);
@@ -2366,7 +2530,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
 
       // Remove forbidden fields from the resolved document before it will updated/upserted in the
       // local collection.
-      docForStorage = sanitizeDocument(document);
+      docForStorage = sanitizeDocument(new RawBsonDocument(document, new BsonDocumentCodec()));
 
       if (document.get("_id") == null && remoteEvent.getDocumentKey().get("_id") != null) {
         document.put("_id", remoteEvent.getDocumentKey().get("_id"));
@@ -2416,14 +2580,14 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
   private BatchOps replaceOrUpsertOneFromRemote(
       final MongoNamespace namespace,
       final BsonValue documentId,
-      final BsonDocument remoteDocument,
+      final RawBsonDocument remoteDocument,
       final BsonDocument atVersion
   ) {
-    final ChangeEvent<BsonDocument> event;
+    final ChangeEvent<RawBsonDocument> event;
     final Lock lock =
         this.syncConfig.getNamespaceConfig(namespace).getLock().writeLock();
     lock.lock();
-    final BsonDocument docForStorage;
+    final RawBsonDocument docForStorage;
     final CoreDocumentSynchronizationConfig config;
     try {
       config = syncConfig.getSynchronizedDocument(namespace, documentId);
@@ -2465,7 +2629,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
 
     try {
       ongoingOperationsGroup.enter();
-      final ChangeEvent<BsonDocument> event;
+      final ChangeEvent<RawBsonDocument> event;
       final DeleteResult result;
       final NamespaceSynchronizationConfig nsConfig =
           this.syncConfig.getNamespaceConfig(namespace);
@@ -2531,7 +2695,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
 
     try {
       ongoingOperationsGroup.enter();
-      final List<ChangeEvent<BsonDocument>> eventsToEmit = new ArrayList<>();
+      final List<ChangeEvent<RawBsonDocument>> eventsToEmit = new ArrayList<>();
       final DeleteResult result;
       final Lock lock =
           this.syncConfig.getNamespaceConfig(namespace).getLock().writeLock();
@@ -2561,7 +2725,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
             continue;
           }
 
-          final ChangeEvent<BsonDocument> event =
+          final ChangeEvent<RawBsonDocument> event =
               ChangeEvents.changeEventForLocalDelete(namespace, documentId, true);
 
           // this block is to trigger coalescence for a delete after insert
@@ -2583,7 +2747,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
       } finally {
         lock.unlock();
       }
-      for (final ChangeEvent<BsonDocument> event : eventsToEmit) {
+      for (final ChangeEvent<RawBsonDocument> event : eventsToEmit) {
         emitEvent(BsonUtils.getDocumentId(event.getDocumentKey()), event);
       }
       return result;
@@ -2605,7 +2769,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
       final BsonValue documentId,
       final BsonDocument atVersion
   ) {
-    final ChangeEvent<BsonDocument> event;
+    final ChangeEvent<RawBsonDocument> event;
     final Lock lock =
         this.syncConfig.getNamespaceConfig(namespace).getLock().writeLock();
     lock.lock();
@@ -2708,7 +2872,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
    * @param documentId the document that has a change event for it.
    * @param event      the change event.
    */
-  private void emitEvent(final BsonValue documentId, final ChangeEvent<BsonDocument> event) {
+  private void emitEvent(final BsonValue documentId, final ChangeEvent<RawBsonDocument> event) {
     listenersLock.lock();
     try {
       final NamespaceSynchronizationConfig namespaceSynchronizationConfig =
@@ -2824,7 +2988,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
     return getRemoteCollection(namespace, BsonDocument.class);
   }
 
-  private Set<BsonDocument> getLatestDocumentsForStaleFromRemote(
+  private Iterator<RawBsonDocument> getLatestDocumentsForStaleFromRemote(
       final NamespaceSynchronizationConfig nsConfig,
       final Set<BsonValue> staleIds) {
 
@@ -2832,12 +2996,12 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
     Collections.addAll(ids, staleIds.toArray(new BsonValue[0]));
 
     if (ids.size() == 0) {
-      return new HashSet<>();
+      return Collections.emptyIterator();
     }
 
-    return this.getRemoteCollection(nsConfig.getNamespace()).find(
+    return this.getRemoteCollection(nsConfig.getNamespace(), RawBsonDocument.class).find(
         new Document("_id", new Document("$in", ids))
-    ).into(new HashSet<>());
+    ).iterator();
   }
 
   void waitUntilInitialized() {
@@ -2871,9 +3035,9 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
    *                   already knows the _id, the document need not be traversed to find it)
    * @return a BsonDocument without any forbidden fields.
    */
-  private static BsonDocument sanitizeCachedDocument(
+  private static RawBsonDocument sanitizeCachedDocument(
           final MongoCollection<BsonDocument> localCollection,
-          final BsonDocument document,
+          final RawBsonDocument document,
           final BsonValue documentId
   ) {
     if (document == null) {
@@ -2888,7 +3052,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
               );
 
       localCollection.findOneAndUpdate(getDocumentIdFilter(documentId), removeVersionUpdate);
-      return clonedDoc;
+      return new RawBsonDocument(clonedDoc, new BsonDocumentCodec());
     }
 
     return document;
@@ -2903,7 +3067,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
    *
    * @return a BsonDocument without any forbidden fields.
    */
-  static BsonDocument sanitizeDocument(final BsonDocument document) {
+  static RawBsonDocument sanitizeDocument(final RawBsonDocument document) {
     if (document == null) {
       return null;
     }
@@ -2911,7 +3075,7 @@ public class DataSynchronizer implements NetworkMonitor.StateListener {
       final BsonDocument clonedDoc = document.clone();
       clonedDoc.remove(DOCUMENT_VERSION_FIELD);
 
-      return clonedDoc;
+      return new RawBsonDocument(document, new BsonDocumentCodec());
     }
     return document;
   }

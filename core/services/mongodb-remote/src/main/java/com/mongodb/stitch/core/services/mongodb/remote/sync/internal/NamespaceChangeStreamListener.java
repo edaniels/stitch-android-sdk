@@ -44,13 +44,15 @@ import javax.annotation.Nullable;
 import org.bson.BsonDocument;
 import org.bson.BsonValue;
 import org.bson.Document;
+import org.bson.RawBsonDocument;
 import org.bson.codecs.BsonDocumentCodec;
 import org.bson.codecs.Codec;
+import org.bson.codecs.RawBsonDocumentCodec;
 import org.bson.diagnostics.Logger;
 import org.bson.diagnostics.Loggers;
 
 public class NamespaceChangeStreamListener implements Closeable {
-  private static final Codec<BsonDocument> BSON_DOCUMENT_CODEC = new BsonDocumentCodec();
+  private static final Codec<RawBsonDocument> BSON_DOCUMENT_CODEC = new RawBsonDocumentCodec();
 
   private final MongoNamespace namespace;
   private final NamespaceSynchronizationConfig nsConfig;
@@ -58,11 +60,11 @@ public class NamespaceChangeStreamListener implements Closeable {
   private final NetworkMonitor networkMonitor;
   private final AuthMonitor authMonitor;
   private final Logger logger;
-  private final Map<BsonValue, ChangeEvent<BsonDocument>> events;
+  private final Map<BsonValue, ChangeEvent<RawBsonDocument>> events;
   private Thread runnerThread;
   private ReadWriteLock nsLock;
-  private final Set<Callback<ChangeEvent<BsonDocument>, Object>> watchers;
-  private Stream<ChangeEvent<BsonDocument>> currentStream;
+  private final Set<Callback<ChangeEvent<RawBsonDocument>, Object>> watchers;
+  private Stream<ChangeEvent<RawBsonDocument>> currentStream;
 
   NamespaceChangeStreamListener(
       final MongoNamespace namespace,
@@ -139,16 +141,16 @@ public class NamespaceChangeStreamListener implements Closeable {
     }
   }
 
-  void addWatcher(final Callback<ChangeEvent<BsonDocument>, Object> callback) {
+  void addWatcher(final Callback<ChangeEvent<RawBsonDocument>, Object> callback) {
     watchers.add(callback);
   }
 
-  void removeWatcher(final Callback<ChangeEvent<BsonDocument>, Object> callback) {
+  void removeWatcher(final Callback<ChangeEvent<RawBsonDocument>, Object> callback) {
     watchers.remove(callback);
   }
 
   private void clearWatchers() {
-    for (final Callback<ChangeEvent<BsonDocument>, Object> watcher : watchers) {
+    for (final Callback<ChangeEvent<RawBsonDocument>, Object> watcher : watchers) {
       watcher.onComplete(
           OperationResult.failedResultOf(null));
     }
@@ -241,7 +243,7 @@ public class NamespaceChangeStreamListener implements Closeable {
   void storeNextEvent() {
     try {
       if (currentStream != null && currentStream.isOpen()) {
-        final StitchEvent<ChangeEvent<BsonDocument>> event = currentStream.nextEvent();
+        final StitchEvent<ChangeEvent<RawBsonDocument>> event = currentStream.nextEvent();
         if (event == null) {
           return;
         }
@@ -264,7 +266,7 @@ public class NamespaceChangeStreamListener implements Closeable {
           nsLock.writeLock().unlock();
         }
 
-        for (final Callback<ChangeEvent<BsonDocument>, Object> watcher : watchers) {
+        for (final Callback<ChangeEvent<RawBsonDocument>, Object> watcher : watchers) {
           watcher.onComplete(OperationResult.successfulResultOf(event.getData()));
         }
       }
@@ -299,9 +301,9 @@ public class NamespaceChangeStreamListener implements Closeable {
    * @return the latest change events.
    */
   @SuppressWarnings("unchecked")
-  public Map<BsonValue, ChangeEvent<BsonDocument>> getEvents() {
+  public Map<BsonValue, ChangeEvent<RawBsonDocument>> getEvents() {
     nsLock.readLock().lock();
-    final Map<BsonValue, ChangeEvent<BsonDocument>> events;
+    final Map<BsonValue, ChangeEvent<RawBsonDocument>> events;
     try {
       events = new HashMap<>(this.events);
     } finally {
@@ -324,10 +326,10 @@ public class NamespaceChangeStreamListener implements Closeable {
    *
    * @return the latest unprocessed change event for the given document ID, or null if none exists.
    */
-  public @Nullable ChangeEvent<BsonDocument> getUnprocessedEventForDocumentId(
+  public @Nullable ChangeEvent<RawBsonDocument> getUnprocessedEventForDocumentId(
       final BsonValue documentId
   ) {
-    final ChangeEvent<BsonDocument> event;
+    final ChangeEvent<RawBsonDocument> event;
     nsLock.readLock().lock();
     try {
       event = this.events.get(documentId);

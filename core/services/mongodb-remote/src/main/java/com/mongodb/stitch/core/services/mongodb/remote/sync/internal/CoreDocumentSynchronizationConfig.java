@@ -45,23 +45,25 @@ import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.bson.BsonWriter;
 import org.bson.Document;
+import org.bson.RawBsonDocument;
 import org.bson.codecs.BsonDocumentCodec;
 import org.bson.codecs.Codec;
 import org.bson.codecs.DecoderContext;
 import org.bson.codecs.EncoderContext;
+import org.bson.codecs.RawBsonDocumentCodec;
 import org.bson.io.BasicOutputBuffer;
 import org.bson.io.OutputBuffer;
 
 
 class CoreDocumentSynchronizationConfig {
-  private static final Codec<BsonDocument> BSON_DOCUMENT_CODEC = new BsonDocumentCodec();
+  private static final Codec<RawBsonDocument> BSON_DOCUMENT_CODEC = new RawBsonDocumentCodec();
 
   private final MongoCollection<CoreDocumentSynchronizationConfig> docsColl;
   private final MongoNamespace namespace;
   private final BsonValue documentId;
   private final ReadWriteLock docLock;
   private final BsonDocumentCodec bsonDocumentCodec = new BsonDocumentCodec();
-  private ChangeEvent<BsonDocument> lastUncommittedChangeEvent;
+  private ChangeEvent<RawBsonDocument> lastUncommittedChangeEvent;
   private long lastResolution;
   private BsonDocument lastKnownRemoteVersion;
   private boolean isStale;
@@ -89,7 +91,7 @@ class CoreDocumentSynchronizationConfig {
       final MongoCollection<CoreDocumentSynchronizationConfig> docsColl,
       final MongoNamespace namespace,
       final BsonValue documentId,
-      final ChangeEvent<BsonDocument> lastUncommittedChangeEvent,
+      final ChangeEvent<RawBsonDocument> lastUncommittedChangeEvent,
       final long lastResolution,
       final BsonDocument lastVersion,
       final ReadWriteLock docsLock,
@@ -194,7 +196,7 @@ class CoreDocumentSynchronizationConfig {
    */
   void setSomePendingWrites(
       final long atTime,
-      final ChangeEvent<BsonDocument> changeEvent
+      final ChangeEvent<RawBsonDocument> changeEvent
   ) {
     // if we were frozen
     if (isPaused) {
@@ -228,7 +230,7 @@ class CoreDocumentSynchronizationConfig {
   void setSomePendingWritesNoDB(
       final long atTime,
       final BsonDocument atVersion,
-      final ChangeEvent<BsonDocument> changeEvent
+      final ChangeEvent<RawBsonDocument> changeEvent
   ) {
     docLock.writeLock().lock();
     try {
@@ -251,7 +253,7 @@ class CoreDocumentSynchronizationConfig {
   void setSomePendingWrites(
       final long atTime,
       final BsonDocument atVersion,
-      final ChangeEvent<BsonDocument> changeEvent
+      final ChangeEvent<RawBsonDocument> changeEvent
   ) {
     docLock.writeLock().lock();
     try {
@@ -348,7 +350,7 @@ class CoreDocumentSynchronizationConfig {
     }
   }
 
-  public ChangeEvent<BsonDocument> getLastUncommittedChangeEvent() {
+  public ChangeEvent<RawBsonDocument> getLastUncommittedChangeEvent() {
     docLock.readLock().lock();
     try {
       return lastUncommittedChangeEvent;
@@ -401,9 +403,9 @@ class CoreDocumentSynchronizationConfig {
    * @param newestChangeEvent          the newest change event known about for a document.
    * @return the possibly coalesced change event.
    */
-  private static ChangeEvent<BsonDocument> coalesceChangeEvents(
-      final ChangeEvent<BsonDocument> lastUncommittedChangeEvent,
-      final ChangeEvent<BsonDocument> newestChangeEvent
+  private static ChangeEvent<RawBsonDocument> coalesceChangeEvents(
+      final ChangeEvent<RawBsonDocument> lastUncommittedChangeEvent,
+      final ChangeEvent<RawBsonDocument> newestChangeEvent
   ) {
     if (lastUncommittedChangeEvent == null) {
       return newestChangeEvent;
@@ -483,7 +485,7 @@ class CoreDocumentSynchronizationConfig {
     }
   }
 
-  static CoreDocumentSynchronizationConfig fromBsonDocument(final BsonDocument document) {
+  static CoreDocumentSynchronizationConfig fromBsonDocument(final RawBsonDocument document) {
     keyPresent(ConfigCodec.Fields.DOCUMENT_ID_FIELD, document);
     keyPresent(ConfigCodec.Fields.NAMESPACE_FIELD, document);
     keyPresent(ConfigCodec.Fields.SCHEMA_VERSION_FIELD, document);
@@ -511,7 +513,7 @@ class CoreDocumentSynchronizationConfig {
       lastVersion = null;
     }
 
-    final ChangeEvent<BsonDocument> lastUncommittedChangeEvent;
+    final ChangeEvent<RawBsonDocument> lastUncommittedChangeEvent;
     if (document.containsKey(ConfigCodec.Fields.LAST_UNCOMMITTED_CHANGE_EVENT)) {
       final BsonBinary eventBin =
           document.getBinary(ConfigCodec.Fields.LAST_UNCOMMITTED_CHANGE_EVENT);
@@ -543,7 +545,7 @@ class CoreDocumentSynchronizationConfig {
         final BsonReader reader,
         final DecoderContext decoderContext
     ) {
-      final BsonDocument document = (new BsonDocumentCodec()).decode(reader, decoderContext);
+      final RawBsonDocument document = new RawBsonDocumentCodec().decode(reader, decoderContext);
       return fromBsonDocument(document);
     }
 

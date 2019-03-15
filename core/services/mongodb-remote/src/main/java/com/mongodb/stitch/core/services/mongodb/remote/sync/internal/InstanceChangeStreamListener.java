@@ -28,6 +28,7 @@ import javax.annotation.Nullable;
 
 import org.bson.BsonDocument;
 import org.bson.BsonValue;
+import org.bson.RawBsonDocument;
 
 interface InstanceChangeStreamListener {
   /**
@@ -64,10 +65,10 @@ interface InstanceChangeStreamListener {
    * Queue a one-off watcher for the next event pass.
    */
   void addWatcher(final MongoNamespace namespace,
-                              final Callback<ChangeEvent<BsonDocument>, Object> watcher);
+                              final Callback<ChangeEvent<RawBsonDocument>, Object> watcher);
 
   void removeWatcher(final MongoNamespace namespace,
-                     final Callback<ChangeEvent<BsonDocument>, Object> watcher);
+                     final Callback<ChangeEvent<RawBsonDocument>, Object> watcher);
 
   /**
    * Requests that the given namespace be started listening to for change events.
@@ -89,7 +90,7 @@ interface InstanceChangeStreamListener {
    * @param namespace the namespace to get events for.
    * @return the latest change events for a given namespace.
    */
-  Map<BsonValue, ChangeEvent<BsonDocument>> getEventsForNamespace(
+  Map<BsonValue, ChangeEvent<RawBsonDocument>> getEventsForNamespace(
       final MongoNamespace namespace);
 
   /**
@@ -111,7 +112,7 @@ interface InstanceChangeStreamListener {
    * @return the latest unprocessed change event for the given document ID and namespace, or null
    *         if none exists.
    */
-  @Nullable ChangeEvent<BsonDocument> getUnprocessedEventForDocumentId(
+  @Nullable ChangeEvent<RawBsonDocument> getUnprocessedEventForDocumentId(
           final MongoNamespace namespace,
           final BsonValue documentId);
 }

@@ -24,6 +24,8 @@ import com.mongodb.stitch.core.services.mongodb.remote.sync.SyncInsertOneResult;
 
 import javax.annotation.Nullable;
 import org.bson.BsonDocument;
+import org.bson.RawBsonDocument;
+import org.bson.codecs.BsonDocumentCodec;
 
 class InsertOneOperation implements Operation<SyncInsertOneResult> {
 
@@ -42,7 +44,7 @@ class InsertOneOperation implements Operation<SyncInsertOneResult> {
   }
 
   public SyncInsertOneResult execute(@Nullable final CoreStitchServiceClient service) {
-    this.dataSynchronizer.insertOne(namespace, document);
+    this.dataSynchronizer.insertOne(namespace, new RawBsonDocument(document, new BsonDocumentCodec()));
     return new SyncInsertOneResult(BsonUtils.getDocumentId(document));
   }
 }

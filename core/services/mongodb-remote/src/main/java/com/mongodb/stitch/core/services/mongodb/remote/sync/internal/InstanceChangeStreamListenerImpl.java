@@ -35,6 +35,7 @@ import javax.annotation.Nullable;
 
 import org.bson.BsonDocument;
 import org.bson.BsonValue;
+import org.bson.RawBsonDocument;
 
 
 final class InstanceChangeStreamListenerImpl implements InstanceChangeStreamListener {
@@ -141,7 +142,7 @@ final class InstanceChangeStreamListenerImpl implements InstanceChangeStreamList
 
   @Override
   public void addWatcher(final MongoNamespace namespace,
-                         final Callback<ChangeEvent<BsonDocument>, Object> watcher) {
+                         final Callback<ChangeEvent<RawBsonDocument>, Object> watcher) {
     if (nsStreamers.containsKey(namespace)) {
       nsStreamers.get(namespace).addWatcher(watcher);
     }
@@ -149,7 +150,7 @@ final class InstanceChangeStreamListenerImpl implements InstanceChangeStreamList
 
   @Override
   public void removeWatcher(final MongoNamespace namespace,
-                            final Callback<ChangeEvent<BsonDocument>, Object> watcher) {
+                            final Callback<ChangeEvent<RawBsonDocument>, Object> watcher) {
     if (nsStreamers.containsKey(namespace)) {
       nsStreamers.get(namespace).removeWatcher(watcher);
     }
@@ -206,7 +207,7 @@ final class InstanceChangeStreamListenerImpl implements InstanceChangeStreamList
    * @param namespace the namespace to get events for.
    * @return the latest change events for a given namespace.
    */
-  public Map<BsonValue, ChangeEvent<BsonDocument>> getEventsForNamespace(
+  public Map<BsonValue, ChangeEvent<RawBsonDocument>> getEventsForNamespace(
       final MongoNamespace namespace
   ) {
     this.instanceLock.readLock().lock();
@@ -246,7 +247,7 @@ final class InstanceChangeStreamListenerImpl implements InstanceChangeStreamList
    * @return the latest unprocessed change event for the given document ID and namespace, or null
    *         if none exists.
    */
-  public @Nullable ChangeEvent<BsonDocument> getUnprocessedEventForDocumentId(
+  public @Nullable ChangeEvent<RawBsonDocument> getUnprocessedEventForDocumentId(
           final MongoNamespace namespace,
           final BsonValue documentId
   ) {

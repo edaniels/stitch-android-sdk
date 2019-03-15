@@ -249,7 +249,7 @@ public abstract class CoreStitchAuth<StitchUserT extends CoreStitchUser>
                                       final Decoder<T> resultDecoder) {
     final Response response = doAuthenticatedRequest(stitchReq);
     try {
-      return BsonUtils.parseValue(IoUtils.readAllToString(response.getBody()), resultDecoder);
+      return BsonUtils.parseValue(response.getBody(), resultDecoder);
     } catch (final Exception e) {
       throw new StitchRequestException(e, StitchRequestErrorCode.DECODING_ERROR);
     }
@@ -276,8 +276,7 @@ public abstract class CoreStitchAuth<StitchUserT extends CoreStitchUser>
     final Response response = doAuthenticatedRequest(stitchReq);
 
     try {
-      return BsonUtils.parseValue(IoUtils.readAllToString(
-          response.getBody()), resultClass, codecRegistry);
+      return BsonUtils.parseValue(response.getBody(), resultClass, codecRegistry);
     } catch (final Exception e) {
       throw new StitchRequestException(e, StitchRequestErrorCode.DECODING_ERROR);
     }

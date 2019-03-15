@@ -96,13 +96,12 @@ public class CoreRemoteFindIterableImpl<DocumentT, ResultT>
   public ResultT first() {
     final Iterator<ResultT> iter = getOperations()
         .findFirst(filter, getResultClass(), findOptions)
-        .execute(getService())
-        .iterator();
+        .execute(getService());
     return iter.hasNext() ? iter.next() : null;
   }
 
   @Override
-  Operation<Collection<ResultT>> asOperation() {
+  Operation<Iterator<ResultT>> asOperation() {
     return getOperations().find(filter, getResultClass(), findOptions);
   }
 }

@@ -26,6 +26,7 @@ import com.mongodb.stitch.core.services.mongodb.remote.UpdateDescription;
 
 import org.bson.BsonDocument;
 import org.bson.BsonValue;
+import org.bson.RawBsonDocument;
 import org.bson.codecs.Codec;
 import org.bson.codecs.DecoderContext;
 
@@ -37,9 +38,9 @@ public final class ChangeEvents {
    * @param document the document that was inserted.
    * @return a change event for a local insert of the given document in the given namespace.
    */
-  static ChangeEvent<BsonDocument> changeEventForLocalInsert(
+  static ChangeEvent<RawBsonDocument> changeEventForLocalInsert(
       final MongoNamespace namespace,
-      final BsonDocument document,
+      final RawBsonDocument document,
       final boolean writePending
   ) {
     final BsonValue docId = BsonUtils.getDocumentId(document);
@@ -63,11 +64,11 @@ public final class ChangeEvents {
    * @return a change event for a local update of a document in the given namespace referring
    *         to the given document _id.
    */
-  static ChangeEvent<BsonDocument> changeEventForLocalUpdate(
+  static ChangeEvent<RawBsonDocument> changeEventForLocalUpdate(
       final MongoNamespace namespace,
       final BsonValue documentId,
       final UpdateDescription update,
-      final BsonDocument fullDocumentAfterUpdate,
+      final RawBsonDocument fullDocumentAfterUpdate,
       final boolean writePending
   ) {
     return new ChangeEvent<>(
@@ -90,10 +91,10 @@ public final class ChangeEvents {
    * @return a change event for a local replacement of a document in the given namespace referring
    *         to the given document _id.
    */
-  static ChangeEvent<BsonDocument> changeEventForLocalReplace(
+  static ChangeEvent<RawBsonDocument> changeEventForLocalReplace(
       final MongoNamespace namespace,
       final BsonValue documentId,
-      final BsonDocument document,
+      final RawBsonDocument document,
       final boolean writePending
   ) {
     return new ChangeEvent<>(
@@ -115,7 +116,7 @@ public final class ChangeEvents {
    * @return a change event for a local deletion of a document in the given namespace referring
    *         to the given document _id.
    */
-  static ChangeEvent<BsonDocument> changeEventForLocalDelete(
+  static ChangeEvent<RawBsonDocument> changeEventForLocalDelete(
       final MongoNamespace namespace,
       final BsonValue documentId,
       final boolean writePending
@@ -137,7 +138,7 @@ public final class ChangeEvents {
    * @return the transformed {@link ChangeEvent}
    */
   static ChangeEvent transformChangeEventForUser(
-      final ChangeEvent<BsonDocument> event,
+      final ChangeEvent<RawBsonDocument> event,
       final Codec codec
   ) {
     return new ChangeEvent<>(

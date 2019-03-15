@@ -68,7 +68,7 @@ class MainActivity : AppCompatActivity(), CoroutineScope by MainScope() {
         }
 
         coll = stitchAppClient!!
-            .getServiceClient(RemoteMongoClient.factory, "mongodb")
+            .getServiceClient(RemoteMongoClient.factory, "mongodb-atlas")
             .getDatabase("stress")
             .getCollection("tests")
 
@@ -84,7 +84,7 @@ class MainActivity : AppCompatActivity(), CoroutineScope by MainScope() {
             }
         )
         (stitchAppClient!!
-                .getServiceClient(RemoteMongoClient.factory, "mongodb") as RemoteMongoClientImpl)
+                .getServiceClient(RemoteMongoClient.factory, "mongodb-atlas") as RemoteMongoClientImpl)
                 .dataSynchronizer.disableSyncThread()
         updateLabels()
     }
@@ -103,7 +103,7 @@ class MainActivity : AppCompatActivity(), CoroutineScope by MainScope() {
             }
             withContext(coroutineContext) {
                 (stitchAppClient!!
-                    .getServiceClient(RemoteMongoClient.factory, "mongodb")
+                    .getServiceClient(RemoteMongoClient.factory, "mongodb-atlas")
                     as RemoteMongoClientImpl)
                     .dataSynchronizer.doSyncPass()
             }
@@ -173,7 +173,7 @@ class MainActivity : AppCompatActivity(), CoroutineScope by MainScope() {
             if (syncedIds.size > 0) {
                 Tasks.await(syncedColl!!.desyncMany(*syncedIds.toTypedArray()))
                 (stitchAppClient!!
-                    .getServiceClient(RemoteMongoClient.factory, "mongodb")
+                    .getServiceClient(RemoteMongoClient.factory, "mongodb-atlas")
                     as RemoteMongoClientImpl).dataSynchronizer.doSyncPass()
             }
         }
@@ -183,8 +183,8 @@ class MainActivity : AppCompatActivity(), CoroutineScope by MainScope() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        if (!Stitch.hasAppClient("stress-mvigw")) {
-            Stitch.initializeDefaultAppClient("stress-mvigw", StitchAppClientConfiguration.Builder().withBaseUrl("http://10.0.2.2:9090").build())
+        if (!Stitch.hasAppClient("stress-slvtw")) {
+            Stitch.initializeDefaultAppClient("stress-slvtw", StitchAppClientConfiguration.Builder().withBaseUrl("https://stitch-qa.mongodb.com").build())
         }
 
         stitchAppClient = Stitch.getDefaultAppClient()
